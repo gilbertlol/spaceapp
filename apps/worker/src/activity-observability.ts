@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { defaultPayloadConverter } from "@temporalio/common";
+import { TRACE_HEADER } from "./workflow-telemetry-types.js";
 import { randomBytes } from "node:crypto";
 import type { Context } from "@temporalio/activity";
 import type { ActivityInterceptorsFactory } from "@temporalio/worker";
@@ -29,6 +31,7 @@ type ActivityInfo = Pick<
 export type ActivityOutcome = "COMPLETED" | "FAILED_RESULT" | "FAILED" | "CANCELLED";
 
 interface ActivityObservation {
+  traceparent?: string;
   reasonCode: string | null;
 }
 
@@ -59,6 +62,8 @@ export function failureReasonScope<T>(execute: () => Promise<T>): { promise: Pro
 export function childTraceparent(traceparent: string | null | undefined): string | null {
   const parsed = parseTraceparent(traceparent);
   if (!parsed) return null;
+  const active = observations.getStore()?.traceparent;
+  if (active && parseTraceparent(active)?.traceId === parsed.traceId) return active;
   let spanId = randomBytes(8).toString("hex");
   while (/^0+$/.test(spanId)) spanId = randomBytes(8).toString("hex");
   return formatTraceparent(parsed.traceId, spanId, parsed.flags);
@@ -137,6 +142,7 @@ export interface ObserveActivityDependencies {
   cancelled?: () => boolean;
   /** OTLP export (SPACE_OTEL_EXPORTER_OTLP_ENDPOINT): one span per activity whose input carries a traceparent. */
   spans?: SpanExporter | null;
+  parentTraceparent?: string;
 }
 
 function activityTraceparent(args: readonly unknown[]) {
@@ -172,7 +178,11 @@ export async function observeActivityExecution<T>(
   if (queueMs !== null) metrics.activityScheduleToStart.observe(labels, queueMs / 1000);
   metrics.activitiesInFlight.inc(labels);
   workerLog("info", "activity.started", { ...base, queueMs });
-  const observation: ActivityObservation = { reasonCode: null };
+  const parent = dependencies.spans ? parseTraceparent(dependencies.parentTraceparent) ?? activityTraceparent(args) : null;
+  let spanId = randomBytes(8).toString('hex');
+  while (/^0+$/.test(spanId)) spanId = randomBytes(8).toString('hex');
+  const observation: ActivityObservation = { reasonCode: null,
+    ...(parent ? { traceparent: formatTraceparent(parent.traceId, spanId, parent.flags) } : {}) };
 
   const finish = (outcome: ActivityOutcome, reasonCode: string | null, errorName: string | null) => {
     const durationMs = Math.max(0, now() - startedAt);
@@ -194,19 +204,22 @@ export async function observeActivityExecution<T>(
       queueMs,
       rssBytes: process.memoryUsage().rss
     });
-    const parent = dependencies.spans ? activityTraceparent(args) : null;
     if (parent) {
-      dependencies.spans!.record({
+      try { dependencies.spans!.record({
         traceId: parent.traceId,
-        spanId: randomBytes(8).toString("hex"),
+        spanId,
         parentSpanId: parent.parentId,
         name: `activity ${activityType}`,
         startTimeUnixNano: BigInt(startedAt) * 1_000_000n,
         endTimeUnixNano: BigInt(startedAt + durationMs) * 1_000_000n,
-        attributes: { "space.activity_type": activityType, "space.outcome": outcome, "space.attempt": info.attempt },
+        attributes: { "space.activity_type": activityType, "space.outcome": outcome, "space.attempt": info.attempt,
+          "space.workflow_id": info.workflowExecution?.workflowId ?? "unknown",
+          "space.run_id": info.workflowExecution?.runId ?? "unknown",
+          ...(reasonCode ? { "space.reason_code": reasonCode } : {}),
+          ...(category ? { "space.category": category } : {}) },
         error: outcome === "FAILED" || outcome === "FAILED_RESULT",
         kind: 1
-      });
+      }); } catch { /* Export failures must not affect activity results or retries. */ }
     }
   };
 
@@ -229,6 +242,13 @@ export function createActivityObservabilityInterceptors(dependencies: Omit<Obser
     inbound: {
       execute: (input, next) => observeActivityExecution(context.info, input.args, () => next(input), {
         ...dependencies,
+        parentTraceparent: (() => {
+          try {
+            const payload = input.headers[TRACE_HEADER];
+            const value = payload ? defaultPayloadConverter.fromPayload(payload) as { traceparent?: unknown } : null;
+            return typeof value?.traceparent === "string" && parseTraceparent(value.traceparent) ? value.traceparent : undefined;
+          } catch { return undefined; }
+        })(),
         cancelled: () => context.cancellationSignal.aborted
       })
     }

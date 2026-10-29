@@ -22,6 +22,7 @@ export interface ServerSpan {
   error: boolean;
   /** OTLP span kind; SERVER (2) unless given. Worker activities use INTERNAL (1). */
   kind?: number;
+  links?: readonly { traceId: string; spanId: string }[];
 }
 
 export interface SpanExporterStats {
@@ -80,6 +81,10 @@ export function otlpTraceRequest(spans: readonly ServerSpan[], serviceName: stri
           traceId: span.traceId,
           spanId: span.spanId,
           ...(span.parentSpanId ? { parentSpanId: span.parentSpanId } : {}),
+          ...(span.links?.length ? { links: span.links.slice(0, 4).filter(link =>
+            traceIdPattern.test(link.traceId) && spanIdPattern.test(link.spanId) &&
+            !/^0+$/.test(link.traceId) && !/^0+$/.test(link.spanId)
+          ).map(link => ({ traceId: link.traceId, spanId: link.spanId })) } : {}),
           name: span.name,
           kind: span.kind ?? 2,
           startTimeUnixNano: span.startTimeUnixNano.toString(),
@@ -121,14 +126,13 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
     }
   };
   const flush = (): Promise<void> => {
+    // Do not cache an already-settled idle flush. An async function containing
+    // no await would clear inFlight before the assignment below stores it.
+    if (!inFlight && !queue.length) return Promise.resolve();
     if (!inFlight) {
       inFlight = (async () => {
-        try {
-          while (queue.length) await flushOnce();
-        } finally {
-          inFlight = null;
-        }
-      })();
+        while (queue.length) await flushOnce();
+      })().finally(() => { inFlight = null; });
     }
     return inFlight;
   };

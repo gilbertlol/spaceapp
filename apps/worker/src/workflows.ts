@@ -39,6 +39,7 @@ import {
 } from "./room-supervisor-state.js";
 import { isCliChatTurnProviderId, isNativeChatTurn, NATIVE_CHAT_TURN_ACTIVITY_TIMEOUT } from "./turn-runtime-policy.js";
 import { runDotGoalLoop } from "./dot-goal-loop.js";
+import { beginMissionTrace } from "./workflow-trace-state.js";
 
 const { recordDummyTurnStarted, recordDummyTurnCompleted } = proxyActivities<typeof activities>({
   startToCloseTimeout: "1 minute",
@@ -196,6 +197,8 @@ async function legacyRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorIn
       processedCount += 1;
     } else {
       const item = pending.shift()!;
+      const finishMissionTrace = beginMissionTrace(item.turn);
+      let missionTraceOutcome: "COMPLETED" | "CANCELLED" | "FAILED" = "COMPLETED";
       activeMissionId = item.missionId;
       activeStopReason = "Stopped by operator.";
       activeScope = new CancellationScope({ cancellable: true });
@@ -228,6 +231,7 @@ async function legacyRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorIn
           });
         }
       } catch (error) {
+        missionTraceOutcome = isCancellation(error) ? "CANCELLED" : "FAILED";
         await CancellationScope.nonCancellable(() =>
           markRoomAgentMissionFinished({
             missionId: item.missionId,
@@ -238,6 +242,7 @@ async function legacyRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorIn
           })
         );
       } finally {
+        finishMissionTrace(missionTraceOutcome);
         activeMissionId = null;
         activeScope = null;
         processedCount += 1;
@@ -313,6 +318,8 @@ async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervis
       processedCount++;
     } else if (pending.length) {
       const item = pending.shift()!;
+      const finishMissionTrace = beginMissionTrace(item.turn);
+      let missionTraceOutcome: "COMPLETED" | "CANCELLED" | "FAILED" = "COMPLETED";
       active = item;
       scope = new CancellationScope({ cancellable: true });
       stopReason = "Stopped by operator.";
@@ -340,6 +347,7 @@ async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervis
           }
         });
       } catch (error) {
+        missionTraceOutcome = isCancellation(error) ? "CANCELLED" : "FAILED";
         await CancellationScope.nonCancellable(async () => {
           const reason = isCancellation(error) ? stopReason : "Room Agent supervisor turn failed.";
           const errorCode = isCancellation(error) ? undefined : supervisorFailureCode(error);
@@ -349,7 +357,7 @@ async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervis
             await supervisorActivities.finishRoomAgentSupervisorTurn({ item, status: errorCode ? "FAILED" : "INTERRUPTED", statusReason: reason, errorCode });
           }
         });
-      } finally { active = null; scope = null; processedCount++; }
+      } finally { finishMissionTrace(missionTraceOutcome); active = null; scope = null; processedCount++; }
       if (paused) {
         pending.push(item);
         const revision = signalRevision;

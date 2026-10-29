@@ -219,9 +219,11 @@ The trace context is local by default. An optional OTLP/HTTP (JSON) exporter sen
 SERVER span per API request when `SPACE_OTEL_EXPORTER_OTLP_ENDPOINT` is set (no
 OpenTelemetry dependency; `packages/runtime/src/otlp-span-exporter.ts`). Since
 2026-10-16 the worker and both memory workers use the same exporter (services
-`space-worker`, `space-memory-maintenance-worker`, `space-memory-mutation-worker`):
-one INTERNAL span per activity whose input carries a `traceparent`, as a child of
-that span, with the activity type, outcome and attempt only.
+`space-worker`, `space-memory-maintenance-worker`, `space-memory-mutation-worker`).
+Workflow instrumentation adds execution spans above each activity attempt. Temporal
+headers connect activities and child workflows to the workflow span; the API
+propagates its actual exported SERVER parent. See [worker trace export](worker-tracing.md)
+for per-mission scopes, continuation links, privacy and verification.
 - **API:** a valid inbound `traceparent` is continued (same trace ID, new span).
   An invalid or missing header gets a new trace ID. Every API log line carries
   `w3cTraceId` (Fastify `childLoggerFactory`).
@@ -233,13 +235,20 @@ that span, with the activity type, outcome and attempt only.
 - **Worker:** worker logs read the trace ID from the activity input. Internal
   room-action calls from the worker send a child `traceparent`, so the internal
   API request joins the same trace.
-- **Workflow code is unchanged.** Correlation is done in the API starter
-  (input/memo) and in an activity interceptor. The workflow bundle only gains the
-  optional contract field.
+- **Replay-safe workflow instrumentation.** Correlation starts in the API
+  (input/memo), travels through a versioned workflow interceptor, and is read by
+  the activity interceptor. Workflow tracing performs no I/O or random draws;
+  completed spans leave through replay-suppressed sinks.
 
 ### Replay compatibility
 
-No file under `apps/worker/src` that the workflow bundle imports was changed
+Current workflow tracing uses the `space-otlp-workflow-v1` version marker and
+replay-suppressed sinks. See the worker tracing guide for real test-server
+checks. Validate an operator's own histories before deployment. The following
+paragraphs retain the historical evidence for the earlier activity-only change;
+they do not certify the new workflow interceptor against production histories.
+
+For the previous activity-only implementation, no file under `apps/worker/src` that the workflow bundle imports was changed
 (`workflows.ts`, `room-supervisor-state.ts`, `turn-runtime-policy.ts`,
 `dot-goal-loop.ts`). The `agent-turns` workflow bundle was built for the base
 commit and for this change and compared after normalizing paths and webpack
@@ -336,8 +345,8 @@ No credential or transcript export was added.
   the lookup also returns the Space-native agent runs (`space_agent_runs`) of the
   trace's workflows, joined by workflow id, with their status and error code, and
   names a failed run's code as the cause when no event carries one.
-- **Hosts emit no spans.** Since 2026-10-16 the OTLP exporter sends API SERVER
-  spans and worker activity spans (the worker and both memory workers); the CLI
+- **Hosts emit no spans.** The OTLP exporter sends API SERVER, workflow and
+  worker activity spans (the worker and both memory workers); the CLI
   and Browser Hosts still join traces through log lines only.
 - **Recovery counters are partial.** Recovery counters exist for plan model
   retries, CLI terminal reconnects and worker activity retries only.

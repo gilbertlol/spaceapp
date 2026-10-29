@@ -1,5 +1,15 @@
 # API configuration reference
 
+## Worker trace export
+
+`SPACE_OTEL_EXPORTER_OTLP_ENDPOINT` is a collector base URL, read separately by
+the API and each worker process. Spans are sent to `<endpoint>/v1/traces`.
+Unset it to disable network export. Keep the versioned workflow interceptor
+registered when changing this setting so existing histories remain replayable.
+Worker and activity identifiers/status are allowlisted; prompts, output, raw
+errors and paths are excluded. See [worker trace export](quality/worker-tracing.md)
+for propagation, continuation links, failure behavior and real Temporal checks.
+
 For a first local contribution, follow [CONTRIBUTING](../CONTRIBUTING.md).
 Production installation and provider login belong to the supported installer;
 the API reference is for developers and operators reviewing advanced settings.
