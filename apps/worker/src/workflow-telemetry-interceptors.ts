@@ -7,6 +7,7 @@ import {
 import { TRACE_HEADER, type TraceEnvelope, type WorkflowSpan } from "./workflow-telemetry-types.js";
 import { currentTrace, finishTrace, initializeTrace, newTrace, traceparentOf } from "./workflow-trace-state.js";
 
+/** Extracts and validates a propagated trace envelope from Temporal workflow headers. */
 function readHeader(headers: Headers): TraceEnvelope | null {
   try {
     const payload = headers[TRACE_HEADER];
@@ -17,10 +18,12 @@ function readHeader(headers: Headers): TraceEnvelope | null {
              ...(parseTraceparent(value.predecessor) ? { predecessor: value.predecessor } : {}) };
   } catch { return null; }
 }
+/** Resolves an initial parent traceparent from workflow input arguments or Temporal memo. */
 function inputParent(args: unknown[]): unknown {
   const first = args[0] as { traceparent?: unknown; turn?: { traceparent?: unknown } } | undefined;
   return first?.traceparent ?? first?.turn?.traceparent ?? workflowInfo().memo?.traceparent;
 }
+/** Attaches the current workflow trace envelope to outbound Temporal headers. */
 function decorate(headers: Headers, continuation = false): Headers {
   const state = currentTrace();
   if (!state) return headers;
@@ -29,6 +32,7 @@ function decorate(headers: Headers, continuation = false): Headers {
     : { traceparent: traceparentOf(state) };
   return { ...headers, [TRACE_HEADER]: defaultPayloadConverter.toPayload(envelope)! };
 }
+/** Replay-safe Temporal workflow interceptor factory for OTLP trace propagation and span recording. */
 export const interceptors: WorkflowInterceptorsFactory = () => {
   let enabled = false;
   return {

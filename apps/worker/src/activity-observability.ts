@@ -151,6 +151,7 @@ function activityTraceparent(args: readonly unknown[]) {
   return parseTraceparent(found.traceparent);
 }
 
+/** Observes a Temporal activity execution, recording metrics, structured logs, and an OTLP activity span. */
 export async function observeActivityExecution<T>(
   info: ActivityInfo,
   args: readonly unknown[],

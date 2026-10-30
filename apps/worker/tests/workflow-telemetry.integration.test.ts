@@ -20,6 +20,7 @@ const environments: TestWorkflowEnvironment[] = [];
 afterEach(async () => {
   for (const env of environments.splice(0)) await env.teardown();
 });
+/** Creates and registers a disposable time-skipping Temporal test workflow environment. */
 async function environment() {
   const env = await TestWorkflowEnvironment.createTimeSkipping(serverPath
     ? { server: { executable: { type: "existing-path", path: serverPath } } }
@@ -27,6 +28,7 @@ async function environment() {
   environments.push(env);
   return env;
 }
+/** Creates a Temporal test worker wired with workflow telemetry sinks and activity interceptors. */
 async function worker(env: TestWorkflowEnvironment, exporter: ReturnType<typeof createOtlpSpanExporter> | null,
     activities: Record<string, (...args: any[]) => any> = { syntheticActivity: async () => "ok" },
     workflowsPath = fixture, tracing = true) {
@@ -40,6 +42,7 @@ async function worker(env: TestWorkflowEnvironment, exporter: ReturnType<typeof 
   });
   return { queue, instance };
 }
+/** Captures exported spans in memory for test assertions. */
 function capture() {
   const spans: ServerSpan[] = [];
   return { spans, exporter: {
@@ -155,16 +158,29 @@ describe("real Temporal trace boundaries", () => {
     const captured = capture();
     const { queue, instance } = await worker(env, captured.exporter);
     const background = "00-" + "3".repeat(32) + "-" + "4".repeat(16) + "-01";
+    const generation2 = "00-" + "5".repeat(32) + "-" + "6".repeat(16) + "-01";
     await instance.runUntil(() => env.client.workflow.execute("telemetryTwoMissions", {
       workflowId: "background-" + randomUUID(), taskQueue: queue, memo: { traceparent: parent },
-      args: [[{ traceId: "trace:bg-synthetic", agentRunId: "agent_run:background", traceparent: background,
-        roomAgentContinuation: { sourceTraceparent: parent } }]]
+      args: [[
+        { traceId: "trace:bg-synthetic-1", agentRunId: "agent_run:background-1", traceparent: background,
+          roomAgentContinuation: { sourceTraceparent: parent } },
+        { traceId: "trace:bg-synthetic-2", agentRunId: "agent_run:background-2", traceparent: generation2,
+          pausedOnce: true, roomAgentContinuation: { sourceTraceparent: background } }
+      ]]
     }));
-    const mission = captured.spans.find(s => s.name.endsWith(" mission"))!;
-    expect(mission.traceId).toBe("3".repeat(32));
-    expect(mission.parentSpanId).toBeNull();
-    expect(mission.links).toContainEqual({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
-    expect(captured.spans.find(s => s.name === "activity syntheticActivity")?.parentSpanId).toBe(mission.spanId);
+    const missions = captured.spans.filter(s => s.name.endsWith(" mission"));
+    expect(missions).toHaveLength(2);
+    const [first, second] = missions as [ServerSpan, ServerSpan];
+    expect(first.traceId).toBe("3".repeat(32));
+    expect(first.spanId).toBe("4".repeat(16));
+    expect(first.parentSpanId).toBeNull();
+    expect(first.links).toContainEqual({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
+    expect(second.traceId).toBe("5".repeat(32));
+    expect(second.spanId).toBe("6".repeat(16));
+    expect(second.parentSpanId).toBeNull();
+    expect(second.links).toContainEqual({ traceId: first.traceId, spanId: first.spanId });
+    const activities = captured.spans.filter(s => s.name === "activity syntheticActivity");
+    expect(activities.map(s => s.parentSpanId)).toEqual([first.spanId, second.spanId]);
   }, 60_000);
 
   it("runs the production memory mutation workflow against a real local HTTP collector", async () => {

@@ -71,6 +71,7 @@ function attributeValue(value: string | number) {
   return typeof value === "number" && Number.isInteger(value) ? { intValue: String(value) } : { stringValue: String(value) };
 }
 
+/** Formats a batch of recorded spans into an OTLP/HTTP JSON ExportTraceServiceRequest payload. */
 export function otlpTraceRequest(spans: readonly ServerSpan[], serviceName: string) {
   return {
     resourceSpans: [{
@@ -98,6 +99,7 @@ export function otlpTraceRequest(spans: readonly ServerSpan[], serviceName: stri
   };
 }
 
+/** Creates a bounded, periodic OTLP/HTTP JSON span exporter for the given service name and collector endpoint. */
 export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanExporter {
   const url = otlpTracesUrl(options.endpoint);
   if (!url) throw new Error("Invalid OTLP endpoint.");

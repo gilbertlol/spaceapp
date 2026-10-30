@@ -39,6 +39,7 @@ export class TemporalDotGoalWorkflowCoordinator implements DotGoalWorkflowCoordi
     try { return await action(new Client({ connection, namespace: this.options.namespace })); }
     finally { await connection.close(); }
   }
+  /** Starts the Goal's workflow execution with optional request trace correlation metadata. */
   start(goalId: string, traceId?: string) {
     return this.client(async (client) => {
       try {
@@ -99,6 +100,7 @@ function requestKeyFor(goalId: string, step: number): string {
   return `goal-${createHash("sha256").update(`${goalId}:${step}`).digest("hex").slice(0, 40)}`;
 }
 
+/** Creates the Dot Goal application service for lifecycle, step execution, and reconciliation. */
 export function createDotGoalService(deps: DotGoalServiceDeps) {
   async function activeSession(goal: DotGoal) {
     const session = await deps.store.getSpaceAgentSession(goal.sessionId);
@@ -108,6 +110,7 @@ export function createDotGoalService(deps: DotGoalServiceDeps) {
     return (await deps.goals.transition(goal.goalId, ["ACTIVE", "PAUSED"], status, reason)) ?? goal;
   }
 
+  /** Creates a new Dot Goal and starts its corresponding Temporal workflow execution. */
   async function create(owner: string, dotId: string, raw: unknown, request: FastifyRequest | null): Promise<DotGoal> {
     const input = createDotGoalInputSchema.parse(raw);
     if (!deps.workflow) throw new DotGoalError(503, "DOT_GOALS_UNAVAILABLE", "Goals need the Space worker runtime.");

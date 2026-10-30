@@ -4,6 +4,7 @@ import type { WorkflowTelemetry } from "./workflow-telemetry-types.js";
 
 const id = /^[0-9a-f]+$/;
 const keys = new Set(["space.workflow_id", "space.run_id", "space.workflow_type", "space.mission_id"]);
+/** Creates replay-suppressed Temporal worker sinks that forward allowlisted workflow spans to the OTLP exporter. */
 export function createWorkflowTelemetrySinks(exporter: SpanExporter | null): InjectedSinks<WorkflowTelemetry> {
   return {
     telemetry: {

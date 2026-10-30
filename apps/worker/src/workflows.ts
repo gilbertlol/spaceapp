@@ -141,6 +141,7 @@ export async function roomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorI
   return continuingRoomAgentSupervisorWorkflow(rawInput);
 }
 
+/** Legacy Room Agent supervisor loop preserved for pre-v2 workflow history replay compatibility. */
 async function legacyRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorInput): Promise<never> {
   const input = roomAgentSupervisorInputSchema.parse(rawInput);
   let pending = [...input.pending];
@@ -268,6 +269,7 @@ const supervisorActivities = proxyActivities<typeof activities>({
 /** Upper bound of each list in roomAgentSupervisorInputSchema. */
 const ROOM_AGENT_SUPERVISOR_CARRY_LIMIT = 100;
 
+/** Continuing Room Agent supervisor loop supporting background continuations and pause/resume re-queueing. */
 async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervisorInput): Promise<never> {
   const input = roomAgentSupervisorInputSchema.parse(rawInput);
   let pending = [...input.pending];
@@ -319,7 +321,7 @@ async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervis
     } else if (pending.length) {
       const item = pending.shift()!;
       const finishMissionTrace = beginMissionTrace(item.turn);
-      let missionTraceOutcome: "COMPLETED" | "CANCELLED" | "FAILED" = "COMPLETED";
+      let missionTraceOutcome: "COMPLETED" | "CANCELLED" | "FAILED" | null = "COMPLETED";
       active = item;
       scope = new CancellationScope({ cancellable: true });
       stopReason = "Stopped by operator.";
@@ -327,7 +329,7 @@ async function continuingRoomAgentSupervisorWorkflow(rawInput: RoomAgentSupervis
       try {
         await scope.run(async () => {
           const state = await supervisorActivities.checkRoomAgentSupervisorTurn(item);
-          if (state === "PAUSED") { paused = true; return; }
+          if (state === "PAUSED") { paused = true; missionTraceOutcome = null; return; }
           if (state === "SKIP") {
             await supervisorActivities.discardRoomAgentSupervisorTurn({ item, reason: "Turn is no longer active or was superseded." });
             return;
